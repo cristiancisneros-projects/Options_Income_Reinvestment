@@ -13,7 +13,7 @@ import numpy as np
 #ticker_price_per_lot=100 #This is the stationary price of the stock; Once This program is up & running and Useful we may utilize real time data from yf
 purchasing_power = 1000 #This is what I'm starting with in my own robinhood for the sake of having an application of this program 
 lots = 0 #Amount of $CAN in terms of 100 Shares per lot, since 1 lot = 100 shares, and the share price is approximately $1/share
-calls_outstanding = 0
+calls_outstanding = 0 #These are just initialized
 puts_outstanding = 0 #These are just initialized
 option_cycle = 60 #These are in terms of months, since the OCC has decided that my penny stock doesn't get weeklies, we have expiry every 4 weeks
 
@@ -27,20 +27,17 @@ def covered_call(lots, calls_outstanding, purchasing_power):
         calls_outstanding += 1
         purchasing_power += 5
     return lots, calls_outstanding, purchasing_power
-
 def cash_secured_put(purchasing_power, puts_outstanding):
     if purchasing_power >= 90:
         purchasing_power -= 90
         puts_outstanding += 1
     return purchasing_power, puts_outstanding
-
 def option_expiry(lots, calls_outstanding, puts_outstanding, purchasing_power):
     lots += puts_outstanding
     calls_outstanding = 0
     puts_outstanding = 0
 
     return lots, calls_outstanding, puts_outstanding, purchasing_power
-
 def run_one_month(lots, purchasing_power, calls_outstanding, puts_outstanding):
 
     # 1. Sell covered calls on all lots (OTM calls)
@@ -67,7 +64,9 @@ purchasing_power_history = []
 equity_history = []
 months = []
 
+monthly_deposit=0 #Set to zero for the moment; Since I am using this model to make financial decisions, I may deposit this amount
 for month in range(1, option_cycle + 1):
+    purchasing_power += monthly_deposit
     lots, purchasing_power, calls_outstanding, puts_outstanding = run_one_month(
         lots, purchasing_power, calls_outstanding, puts_outstanding
     )
@@ -109,4 +108,22 @@ plt.show()
 
 print(lots*100 + purchasing_power, "This is the current dollar value of the portfolio after the option cycles.")
 
-    
+# --- Annual summary computation ---
+annual_equity = []
+annual_lots = []
+
+# Extract year-end data
+for year in range(1, option_cycle // 12 + 1):
+    end_index = year * 12 - 1
+    annual_equity.append(equity_history[end_index])
+    annual_lots.append(lots_history[end_index])
+
+print("\n===== ANNUAL SUMMARY =====")
+for i, eq in enumerate(annual_equity):
+    print(f"Year {i+1}: Lots = {annual_lots[i]}, Equity = ${eq}")
+
+print("\n===== ANNUAL PERCENT GROWTH =====")
+for i in range(1, len(annual_equity)):
+    growth = (annual_equity[i] - annual_equity[i-1]) / annual_equity[i-1] * 100
+    print(f"Year {i}: {growth:.2f}% growth")
+
