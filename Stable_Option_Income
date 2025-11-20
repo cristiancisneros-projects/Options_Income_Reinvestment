@@ -1,0 +1,112 @@
+#Remark: this is my high risk option premium reinvestment calculator for growth due to steady premiums, share accumulation, & compounding returns.
+#Remark: We make the assumptions: price is stationary, option premiums do not change, bid-ask is $0.05-$0.10 for Calls, $0.10-$0.15 for Puts
+#Remark: The only kind of options traded in this model are Covered Calls and Cash Secured Puts. There will be no purchasing of options but only shorting them.
+#Remark: The model is currently adapted to only 1 stock; I trade Volatile Asian Penny Stocks since there are high premiums & cheap share prices. "NFA"
+
+#IMPORTANT: The purpose of this model is not to accumulate purchasing power; it is to accumulate shares over time with re-invested purchasing power
+
+import matplotlib.pyplot as plt
+import numpy as np
+#import yfinance as yf
+
+#ticker="$CAN" #This model isn't adapted to a broad amount of tickers yet, but eventually it will be.
+#ticker_price_per_lot=100 #This is the stationary price of the stock; Once This program is up & running and Useful we may utilize real time data from yf
+purchasing_power = 1000 #This is what I'm starting with in my own robinhood for the sake of having an application of this program 
+lots = 0 #Amount of $CAN in terms of 100 Shares per lot, since 1 lot = 100 shares, and the share price is approximately $1/share
+calls_outstanding = 0
+puts_outstanding = 0 #These are just initialized
+option_cycle = 60 #These are in terms of months, since the OCC has decided that my penny stock doesn't get weeklies, we have expiry every 4 weeks
+
+def portfolio(lots, calls_outstanding, puts_outstanding, purchasing_power):
+    print("Lots owned: ", lots)
+    print("Calls Outstanding: ", calls_outstanding)
+    print("Puts Outstanding: ", puts_outstanding)
+    print("Purchasing Power: $", purchasing_power)
+def covered_call(lots, calls_outstanding, purchasing_power):
+    if lots >= 1:
+        calls_outstanding += 1
+        purchasing_power += 5
+    return lots, calls_outstanding, purchasing_power
+
+def cash_secured_put(purchasing_power, puts_outstanding):
+    if purchasing_power >= 90:
+        purchasing_power -= 90
+        puts_outstanding += 1
+    return purchasing_power, puts_outstanding
+
+def option_expiry(lots, calls_outstanding, puts_outstanding, purchasing_power):
+    lots += puts_outstanding
+    calls_outstanding = 0
+    puts_outstanding = 0
+
+    return lots, calls_outstanding, puts_outstanding, purchasing_power
+
+def run_one_month(lots, purchasing_power, calls_outstanding, puts_outstanding):
+
+    # 1. Sell covered calls on all lots (OTM calls)
+    while calls_outstanding < lots:
+        lots, calls_outstanding, purchasing_power = covered_call(
+            lots, calls_outstanding, purchasing_power
+        )
+
+    # 2. Sell CSPs as long as possible
+    while purchasing_power >= 90:
+        purchasing_power, puts_outstanding = cash_secured_put(
+            purchasing_power, puts_outstanding
+        )
+
+    # 3. Expire all options
+    lots, calls_outstanding, puts_outstanding, purchasing_power = option_expiry(
+        lots, calls_outstanding, puts_outstanding, purchasing_power
+    )
+
+    return lots, purchasing_power, calls_outstanding, puts_outstanding
+
+lots_history = []
+purchasing_power_history = []
+equity_history = []
+months = []
+
+for month in range(1, option_cycle + 1):
+    lots, purchasing_power, calls_outstanding, puts_outstanding = run_one_month(
+        lots, purchasing_power, calls_outstanding, puts_outstanding
+    )
+
+    # Record history
+    months.append(month)
+    lots_history.append(lots)
+    purchasing_power_history.append(purchasing_power)
+    equity = purchasing_power + lots * 100
+    equity_history.append(equity)
+
+    print(f"----- MONTH {month} -----")
+    portfolio(lots, calls_outstanding, puts_outstanding, purchasing_power)
+
+
+plt.figure(figsize=(8,4))
+plt.plot(months, equity_history, marker="^", color="k")
+plt.title("Total Equity Over Time")
+plt.xlabel("Month")
+plt.ylabel("Total Equity ($)")
+plt.grid(True)
+plt.show()
+
+plt.figure(figsize=(8,4))
+plt.plot(months, lots_history, marker="o", color="red")
+plt.title("Lots Over Time")
+plt.xlabel("Month")
+plt.ylabel("Lots Owned")
+plt.grid(True)
+plt.show()
+
+plt.figure(figsize=(8,4))
+plt.plot(months, purchasing_power_history, marker="s", color="orange")
+plt.title("Purchasing Power Over Time")
+plt.xlabel("Month")
+plt.ylabel("Purchasing Power ($)")
+plt.grid(True)
+plt.show()
+
+print(lots*100 + purchasing_power, "This is the current dollar value of the portfolio after the option cycles.")
+
+    
