@@ -1,0 +1,9 @@
+#This is the extension of the 1st model. The premiums on the penny stock I trade tend to remain at $0.05 per fill for OTM call options; I only sell calls that are so out of the money that I believe that I am
+#Guaranteed to keep the premium on it but for CC's. For CSP's, the premium changes from $0.05 to even $0.25 at the ask & filled at $0.2.
+#Remark: as soon as my old calls expire, I tend to re-sell them immediately; some times the penny stock "pumps" and the option premiums go up to $0.10 for those OTM calls, but I sell too early to capitalize on
+#that. I'm not playing the market for the sake of pure optimization of it but in this updated model, CSP premiums will change between $0.1 to $0.2. So there is a better upper bound. A goal I have for this model
+#is to make it sophisticated enough that I can backtest on it in the last 5 months. I like to buy into stocks which IPO'd during COVID, got destroyed by that market but have good fundamentals rather than trading
+#price action like RSI or Retail Sentiment. $CAN, Canaan, sells bitcoin miners & actually behaves very much like it's pegged to the price of bitcoin. They're opening up data centers and getting active using
+#the buzzwords that attract institutional investors. But for the last couple months, their stock price has remained at about between ($0.5 -> $2.2). When my options expired during the month during $2.2, price
+#decayed back to where my calls were OTM.
+
