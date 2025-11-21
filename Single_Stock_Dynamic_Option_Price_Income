@@ -18,6 +18,14 @@ lots = int(input("How many lots do you currently own?")) #Amount of $CAN in term
 calls_outstanding = 0 #These are just initialized
 puts_outstanding = int(input("How many puts do you have sold initially?")) #These are just initialized
 option_cycle = int(input("How many months would you like to simulate over?")) #These are in terms of months, since the OCC has decided that my penny stock doesn't get weeklies, we have expiry every 4 weeks
+price=float(input("What is the current stock price?"))
+price_per_lot=int(price*100)
+
+
+init_price=price
+init_lots=lots
+init_purchasing_power=purchasing_power
+init_puts_outstanding=puts_outstanding
 
 def portfolio(lots, calls_outstanding, puts_outstanding, purchasing_power):
     print("Lots owned: ", lots)
@@ -26,7 +34,7 @@ def portfolio(lots, calls_outstanding, puts_outstanding, purchasing_power):
     print("Purchasing Power: $", purchasing_power)
 
 premium_steps_cc = [5, 10, 15]    # dollars per contract
-weights_cc = [0.89, 0.10, 0.01]       # preference toward $0.10
+weights_cc = [0.89, 0.10, 0.01]       # preference toward $0.05
 
 premium_cc = random.choices(premium_steps_cc, weights_cc)[0]
 monthly_cc_premiums = []
@@ -34,14 +42,14 @@ monthly_cc_premiums = []
 def get_monthly_premium_cc():
     return random.choices(premium_steps_cc, weights_cc)[0]
 
-def covered_call(lots, calls_outstanding, purchasing_power):
+def covered_call(lots, calls_outstanding, purchasing_power, monthly_premium_cc):
     if lots >= 1:
         calls_outstanding += 1
-        purchasing_power += premium_cc
+        purchasing_power += monthly_premium_cc
     return lots, calls_outstanding, purchasing_power
 
 premium_steps_csp = [5, 10, 15, 20]    # dollars per contract
-weights_csp = [0.05, 0.75, 0.15, 0.05]       # preference toward $0.10
+weights_csp = [0.05, 0.65, 0.25, 0.05]       # preference toward $0.10
 
 premium_csp = random.choices(premium_steps_csp, weights_csp)[0]
 monthly_csp_premiums = []
@@ -49,8 +57,10 @@ monthly_csp_premiums = []
 def get_monthly_premium_csp():
     return random.choices(premium_steps_csp, weights_csp)[0]
 
-def cash_secured_put(purchasing_power, puts_outstanding):
-    if purchasing_power >= 100-premium_csp:
+def cash_secured_put(purchasing_power, puts_outstanding, monthly_premium_csp):
+    collateral = 100 - monthly_premium_csp
+    if purchasing_power >= collateral:
+        purchasing_power -= collateral
         puts_outstanding += 1
     return purchasing_power, puts_outstanding
 
@@ -74,14 +84,18 @@ def run_one_month(lots, purchasing_power, calls_outstanding, puts_outstanding, m
     # 1. Sell covered calls on all lots (same as before)
     while calls_outstanding < lots:
         lots, calls_outstanding, purchasing_power = covered_call(
-            lots, calls_outstanding, purchasing_power
+            lots, calls_outstanding, purchasing_power, monthly_premium_cc
         )
 
     # 2. Sell CSPs as long as possible, using this month's premium
     # effective collateral per CSP = 100 - monthly_premium
-    while purchasing_power >= (100 - monthly_premium_csp):
-        purchasing_power -= (100 - monthly_premium_csp)
-        puts_outstanding += 1
+    effective_collateral = 100 - monthly_premium_csp
+
+    while purchasing_power >= effective_collateral:
+        purchasing_power, puts_outstanding = cash_secured_put(
+            purchasing_power, puts_outstanding, monthly_premium_csp
+        )
+
     
 
     # 3. Expire all options (puts become lots, calls expire worthless)
@@ -144,9 +158,11 @@ print("Average CSP Premium was: $", sum(monthly_csp_premiums)/len(monthly_csp_pr
 print("CC Premiums Monthly were:", monthly_cc_premiums)
 print("Average CC Premium was: $", sum(monthly_cc_premiums)/len(monthly_cc_premiums))
 print("The initial conditions were:")
-print(f"Lots: {lots}")
-print(f"Purchasing Power: ${purchasing_power}")
-print(f"Calls Outstanding: {calls_outstanding}")
-print(f"Puts Outstanding: {puts_outstanding}")
+print("The stock was initially at:",price)
+print(f"Lots: {init_lots}")
+print(f"Purchasing Power: ${init_purchasing_power}")
+print(f"Puts Outstanding: {init_puts_outstanding}")
+
+
 
     
