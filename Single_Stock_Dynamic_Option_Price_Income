@@ -1,9 +1,133 @@
-#This is the extension of the 1st model. The premiums on the penny stock I trade tend to remain at $0.05 per fill for OTM call options; I only sell calls that are so out of the money that I believe that I am
-#Guaranteed to keep the premium on it but for CC's. For CSP's, the premium changes from $0.05 to even $0.25 at the ask & filled at $0.2.
-#Remark: as soon as my old calls expire, I tend to re-sell them immediately; some times the penny stock "pumps" and the option premiums go up to $0.10 for those OTM calls, but I sell too early to capitalize on
-#that. I'm not playing the market for the sake of pure optimization of it but in this updated model, CSP premiums will change between $0.1 to $0.2. So there is a better upper bound. A goal I have for this model
-#is to make it sophisticated enough that I can backtest on it in the last 5 months. I like to buy into stocks which IPO'd during COVID, got destroyed by that market but have good fundamentals rather than trading
-#price action like RSI or Retail Sentiment. $CAN, Canaan, sells bitcoin miners & actually behaves very much like it's pegged to the price of bitcoin. They're opening up data centers and getting active using
-#the buzzwords that attract institutional investors. But for the last couple months, their stock price has remained at about between ($0.5 -> $2.2). When my options expired during the month during $2.2, price
-#decayed back to where my calls were OTM.
+#Remark: this is my high risk option premium reinvestment calculator for growth due to dynamic premiums, share accumulation, & compounding returns.
+#Remark: We make the assumptions: price is stationary, option premiums do not change, bid-ask is $0.05-$0.10 for Calls, $0.10-$0.25 for Puts
+#Remark: The only kind of options traded in this model are Covered Calls and Cash Secured Puts. There will be no purchasing of options but only shorting them.
+#Remark: The model is currently adapted to only 1 stock; I trade Volatile Asian Penny Stocks since there are high premiums & cheap share prices. "NFA"
 
+#IMPORTANT: The purpose of this model is not to accumulate purchasing power; it is to accumulate shares over time with re-invested purchasing power
+
+import matplotlib.pyplot as plt
+import numpy as np
+import random
+#import yfinance as yf
+
+#ticker="$CAN" #This model isn't adapted to a broad amount of tickers yet, but eventually it will be.
+#ticker_price_per_lot=100 #This is the stationary price of the stock; Once This program is up & running and Useful we may utilize real time data from yf
+purchasing_power = int(input("How much do you intend to initially deposit?")) #This is what I'm starting with in my own robinhood for the sake of having an application of this program 
+monthly_deposit=int(input("How much do you intend to deposit monthly?"))
+lots = 0 #Amount of $CAN in terms of 100 Shares per lot, since 1 lot = 100 shares, and the share price is approximately $1/share
+calls_outstanding = 0 #These are just initialized
+puts_outstanding = 0 #These are just initialized
+option_cycle = int(input("How many months would you like to simulate over?")) #These are in terms of months, since the OCC has decided that my penny stock doesn't get weeklies, we have expiry every 4 weeks
+
+def portfolio(lots, calls_outstanding, puts_outstanding, purchasing_power):
+    print("Lots owned: ", lots)
+    print("Calls Outstanding: ", calls_outstanding)
+    print("Puts Outstanding: ", puts_outstanding)
+    print("Purchasing Power: $", purchasing_power)
+def covered_call(lots, calls_outstanding, purchasing_power):
+    if lots >= 1:
+        calls_outstanding += 1
+        purchasing_power += 5
+    return lots, calls_outstanding, purchasing_power
+
+premium_steps_csp = [5, 10, 15, 20]    # dollars per contract
+weights_csp = [0.05, 0.75, 0.15, 0.05]       # preference toward $0.10
+
+premium_csp = random.choices(premium_steps_csp, weights_csp)[0]
+monthly_csp_premiums = []
+
+def get_monthly_premium_csp():
+    return random.choices(premium_steps_csp, weights_csp)[0]
+
+def cash_secured_put(purchasing_power, puts_outstanding):
+    if purchasing_power >= 100-premium_csp:
+        puts_outstanding += 1
+    return purchasing_power, puts_outstanding
+
+def option_expiry(lots, calls_outstanding, puts_outstanding, purchasing_power):
+    lots += puts_outstanding
+    calls_outstanding = 0
+    puts_outstanding = 0
+
+    return lots, calls_outstanding, puts_outstanding, purchasing_power
+
+
+def run_one_month(lots, purchasing_power, calls_outstanding, puts_outstanding, csp_premiums):
+
+    monthly_premium = get_monthly_premium_csp()      # e.g. 5, 10, 15, or 20
+    monthly_csp_premiums.append(monthly_premium)
+
+    purchasing_power += monthly_deposit
+
+    # 1. Sell covered calls on all lots (same as before)
+    while calls_outstanding < lots:
+        lots, calls_outstanding, purchasing_power = covered_call(
+            lots, calls_outstanding, purchasing_power
+        )
+
+    # 2. Sell CSPs as long as possible, using this month's premium
+    # effective collateral per CSP = 100 - monthly_premium
+    while purchasing_power >= (100 - monthly_premium):
+        purchasing_power -= (100 - monthly_premium)
+        puts_outstanding += 1
+    
+
+    # 3. Expire all options (puts become lots, calls expire worthless)
+    lots, calls_outstanding, puts_outstanding, purchasing_power = option_expiry(
+        lots, calls_outstanding, puts_outstanding, purchasing_power
+    )
+
+    return lots, purchasing_power, calls_outstanding, puts_outstanding
+
+
+lots_history = []
+purchasing_power_history = []
+equity_history = []
+months = []
+
+for month in range(1, option_cycle + 1):
+    lots, purchasing_power, calls_outstanding, puts_outstanding = run_one_month(
+        lots, purchasing_power, calls_outstanding, puts_outstanding, csp_premiums
+    )
+
+    # Record history
+    months.append(month)
+    lots_history.append(lots)
+    purchasing_power_history.append(purchasing_power)
+    equity = purchasing_power + lots * 100
+    equity_history.append(equity)
+
+    print(f"----- MONTH {month} -----")
+    portfolio(lots, calls_outstanding, puts_outstanding, purchasing_power)
+
+
+plt.figure(figsize=(8,4))
+plt.plot(months, equity_history, marker="^", color="k")
+plt.title("Total Equity Over Time")
+plt.xlabel("Month")
+plt.ylabel("Total Equity ($)")
+plt.grid(True)
+plt.show()
+
+plt.figure(figsize=(8,4))
+plt.plot(months, lots_history, marker="o", color="red")
+plt.title("Lots Over Time")
+plt.xlabel("Month")
+plt.ylabel("Lots Owned")
+plt.grid(True)
+plt.show()
+
+plt.figure(figsize=(8,4))
+plt.plot(months, purchasing_power_history, marker="s", color="orange")
+plt.title("Purchasing Power Over Time")
+plt.xlabel("Month")
+plt.ylabel("Purchasing Power ($)")
+plt.grid(True)
+plt.show()
+
+print(lots*100 + purchasing_power, "This is the current dollar value of the portfolio after the option cycles.")
+print("CSP Premiums Monthly were:", monthly_csp_premiums)
+print("Average CSP Premium was: $", sum(monthly_csp_premiums)/len(monthly_csp_premiums))
+
+
+    
