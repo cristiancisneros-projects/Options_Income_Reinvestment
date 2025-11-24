@@ -36,7 +36,7 @@ elif sentiment == "bearish":
 elif sentiment == "neutral":
     drift = 0.0
     volatility= 0.15
-elif sentiment == "Hell Yeah": #Hell Yeah, the penny stock i trade has super high volatility I can't lie about that at all
+elif sentiment == "Hell Yeah": #Hell Yeah, the penny stock i trade has super high volatility I can't lie about that at all, using super high vol to debug potential inf loops or the sort
     print("Hell Yeah")
     drift = 0.30
     volatility = 0.8
