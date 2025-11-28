@@ -1,0 +1,356 @@
+#Remark: this is my high risk option premium reinvestment calculator for growth due to dynamic premiums, share accumulation, & compounding returns.
+#Remark: We make the assumptions: price is stationary, option premiums do not change, bid-ask is $0.05-$0.10 for Calls, $0.10-$0.25 for Puts
+#Remark: The only kind of options traded in this model are Covered Calls and Cash Secured Puts. There will be no purchasing of options but only shorting them.
+#Remark: The model is currently adapted to only 1 stock; I trade Volatile Asian Penny Stocks since there are high premiums & cheap share prices. "NFA"
+#IMPORTANT: The purpose of this model is not to accumulate purchasing power; it is to accumulate shares over time with re-invested purchasing power, No margin is used.
+
+import matplotlib.pyplot as plt
+import random
+import numpy as np
+import math
+
+purchasing_power = int(input("How much do you intend to initially deposit?")) #This is what I'm starting with in my own robinhood for the sake of having an application of this program 
+monthly_deposit=int(input("How much do you intend to deposit monthly?"))
+lots = int(input("How many lots do you currently own?")) #Amount of $CAN in terms of 100 Shares per lot, since 1 lot = 100 shares, and the share price is approximately $1/share
+calls_outstanding = int(input("How many calls do you have sold initially?")) #These are just initialized
+puts_outstanding = int(input("How many puts do you have sold initially?")) #These are just initialized
+option_cycle = int(input("How many months would you like to simulate over?")) #These are in terms of months, since the OCC has decided that my penny stock doesn't get weeklies, we have expiry every 4 weeks
+price=float(input("What is the current stock price?"))
+
+init_purchasing_power=purchasing_power
+init_price=price
+init_lots=lots
+init_purchasing_power=purchasing_power
+init_puts_outstanding=puts_outstanding
+
+sentiment=input("How do you feel about the stock? The acceptable responses are: bullish, bearish, neutral")
+if sentiment == "bullish":
+    drift = 0.10  # example
+    volatility= 0.15
+elif sentiment == "bearish":
+    drift = -0.10
+    volatility= 0.20
+elif sentiment == "neutral":
+    drift = 0.0
+    volatility= 0.15
+elif sentiment == "volatile": #Hell Yeah, the penny stock i trade has super high volatility I can't lie about that at all; im using high vol to debug an infinite loop issue
+    print("Hell Yeah")
+    drift = 0.35
+    volatility = 0.75
+else:
+    print("You didn't type something off the list; no movement at all.")
+    drift = 0.0
+    volatility= 0.0
+
+MIN_OPTION_SPOT = 0.50
+S0=price
+def simulate_monthly_prices(S0, drift, volatility, option_cycle):
+    dt = 1/12  # one month = 1/12 yr
+    prices = np.empty(option_cycle + 1)
+    prices[0] = round(S0, 2)
+
+    # pre-draw all randomness
+    Z = np.random.normal(0, 1, size=option_cycle)
+
+    for t in range(1, option_cycle + 1):
+        S_next = prices[t-1] * np.exp(
+            (drift - 0.5 * volatility**2) * dt + volatility * np.sqrt(dt) * Z[t-1]
+        )
+        prices[t] = round(S_next, 2)
+
+    return prices
+prices = simulate_monthly_prices(S0, drift, volatility, option_cycle)
+
+STRIKE_TICK = 0.50     # ONLY half-dollar strikes
+STRIKE_DISTANCE = 0.50 # for calls, if you still want it
+
+def round_to_strike(level, tick=STRIKE_TICK):
+    return round(level / tick) * tick
+
+def next_higher_strike(spot, tick=STRIKE_TICK):
+    k = math.floor(spot / tick) + 1
+    return round(k * tick, 2)
+
+def choose_strike(spot, option_type, moneyness="OTM", distance=STRIKE_DISTANCE):
+    opt = option_type.lower()
+    m   = moneyness.upper()
+
+    if opt == "call":
+        if m == "ATM":
+            raw_strike = spot
+        elif m == "OTM":
+            # I only sell calls at least 2 * distance OTM
+            raw_strike = spot + 2 * distance
+        elif m == "ITM":
+            raw_strike = spot - distance
+        else:
+            raise ValueError("Bad moneyness for call")
+
+        return round_to_strike(raw_strike)
+
+    elif opt == "put":
+        # For CSPs: always nearest higher 0.50
+        return next_higher_strike(spot)
+
+    else:
+        raise ValueError("option_type must be 'call' or 'put'")
+
+def portfolio(lots, calls_outstanding, puts_outstanding, purchasing_power):
+    print("Lots owned: ", lots)
+    print("Calls Outstanding: ", calls_outstanding)
+    print("Puts Outstanding: ", puts_outstanding)
+    print("Purchasing Power: $", purchasing_power)
+
+premium_steps_cc = [5, 10, 15]    # dollars per contract
+weights_cc = [0.89, 0.10, 0.01]       # preference toward $0.05
+
+premium_cc = random.choices(premium_steps_cc, weights_cc)[0]
+monthly_cc_premiums = []
+
+def get_monthly_premium_cc():
+    return random.choices(premium_steps_cc, weights_cc)[0]
+
+def covered_call(lots, calls_outstanding, purchasing_power, monthly_premium_cc, calls_to_sell=1):
+
+    # lots that do NOT already have a call written on them
+    free_lots = lots - calls_outstanding
+
+    if free_lots <= 0:
+        # everything is already covered; can't sell more calls
+        return lots, calls_outstanding, purchasing_power
+
+    # you can't sell more calls than free lots
+    actual_calls_sold = min(calls_to_sell, free_lots)
+
+    calls_outstanding += actual_calls_sold
+    purchasing_power += monthly_premium_cc * actual_calls_sold
+
+    return lots, calls_outstanding, purchasing_power
+
+premium_steps_csp = [5, 10, 15, 20]    # dollars per contract
+weights_csp = [0.05, 0.65, 0.25, 0.05]       # preference toward $0.10
+
+premium_csp = random.choices(premium_steps_csp, weights_csp)[0]
+monthly_csp_premiums = []
+
+def get_monthly_premium_csp(spot, put_strike, extra_edge=0.02, min_premium_per_share=0.05):
+    """
+    spot: current stock price
+    put_strike: strike price of the CSP
+    extra_edge: extra discount (in $/share) to push breakeven below spot
+    min_premium_per_share: floor on premium (e.g. $0.05/share)
+    returns: premium in DOLLARS PER CONTRACT (100 shares)
+    """
+
+    # distance ITM (if any)
+    distance = max(put_strike - spot, 0.0)  # if OTM, this is 0
+
+    # theoretical premium per share to get breakeven below spot
+    required_per_share = distance + extra_edge
+
+    # enforce a minimum per-share premium
+    per_share_premium = max(required_per_share, min_premium_per_share)
+
+    # convert to contract premium (100 shares)
+    premium_per_contract = round(per_share_premium * 100, 2)
+
+    return premium_per_contract
+
+def cash_secured_put(purchasing_power, puts_outstanding, monthly_premium_csp, put_strike):
+    """
+    Simple CSP:
+      - 1 contract
+      - strike = chosen OTM/ATM/ITM level
+      - collateral ≈ put_strike * 100 - premium
+    """
+    notional = round(put_strike * 100, 2)
+    collateral = notional - monthly_premium_csp
+
+    # safety: don't let collateral go negative or zero
+    collateral = max(collateral, 0.01)
+
+    if purchasing_power >= collateral:
+        purchasing_power -= collateral      # lock collateral
+        puts_outstanding += 1               # one more CSP sold
+
+    return purchasing_power, puts_outstanding
+
+def run_one_month(
+    m,  # 0-based month index
+    prices,
+    lots,
+    purchasing_power,
+    calls_outstanding,
+    puts_outstanding,
+    monthly_csp_premiums,
+    monthly_cc_premiums
+):
+    # --- prices for this month ---
+    price_start = prices[m]       # start-of-month price
+    price_end   = prices[m + 1]   # end-of-month price
+
+    if price_start < MIN_OPTION_SPOT:
+        # just deposit, update equity via price_end, and return
+        purchasing_power += monthly_deposit
+        # no new options, no expiries (we can assume old ones already dead), Option markets below $0.50 don't have fills or anything, so skip everything
+        calls_outstanding = 0
+        puts_outstanding  = 0
+        return lots, purchasing_power, calls_outstanding, puts_outstanding
+
+    # --- 1. Choose strikes for this month, based on START price ---
+    put_strike  = choose_strike(price_start, "put")          # nearest higher 0.50
+    call_strike = choose_strike(price_start, "call", "OTM")  # your OTM rule
+
+    # --- 2. Compute CSP premium based on spot vs put_strike ---
+    monthly_premium_csp = get_monthly_premium_csp(price_start, put_strike)
+    monthly_csp_premiums.append(monthly_premium_csp)
+
+    # --- 3. CC premium still random for now ---
+    monthly_premium_cc = get_monthly_premium_cc()
+    monthly_cc_premiums.append(monthly_premium_cc)
+
+    # --- 4. Monthly deposit ---
+    purchasing_power += monthly_deposit
+
+    # --- 5. Sell covered calls on all free lots ---
+    existing_calls = calls_outstanding
+    while calls_outstanding < lots:
+        lots, calls_outstanding, purchasing_power = covered_call(
+            lots, calls_outstanding, purchasing_power, monthly_premium_cc
+        )
+    calls_sold_this_month = calls_outstanding - existing_calls  # if you ever want it
+
+    # --- 6. Sell CSPs with THIS SAME put_strike ---
+    notional = round(put_strike * 100, 2)
+    effective_collateral = notional - monthly_premium_csp
+    effective_collateral = max(effective_collateral, 0.01)
+
+    # puts that existed at the start of this month (like your initial 7)
+    existing_puts = puts_outstanding
+
+    puts_sold_this_month = 0
+    while purchasing_power >= effective_collateral:
+        purchasing_power, puts_outstanding = cash_secured_put(
+            purchasing_power,
+            puts_outstanding,
+            monthly_premium_csp,
+            put_strike
+        )
+        puts_sold_this_month += 1
+
+    # total puts that will be resolved at this expiry
+    total_puts_this_month = existing_puts + puts_sold_this_month
+
+    # --- 7. Resolve ALL puts (initial + new) at expiry using END price ---
+    if total_puts_this_month > 0:
+        if price_end < put_strike:
+            # ASSIGNMENT: each put becomes 1 lot
+            lots += total_puts_this_month
+        else:
+            # EXPIRE WORTHLESS: refund only collateral we actually locked this month
+            purchasing_power += puts_sold_this_month * effective_collateral
+
+        # after expiry, no puts remain
+        puts_outstanding = 0
+
+    # --- 8. Resolve calls at expiry using END price ---
+    if calls_outstanding > 0:
+        if price_end > call_strike:
+            # ASSIGNMENT: lose lots, gain cash at strike
+            assigned_calls = min(calls_outstanding, lots)  # safety
+            lots -= assigned_calls
+            purchasing_power += assigned_calls * call_strike * 100
+        # whether ITM or OTM, those calls are done after expiry
+        calls_outstanding = 0
+
+    # --- 9. Return updated state ---
+    return lots, purchasing_power, calls_outstanding, puts_outstanding
+
+
+
+lots_history = []
+purchasing_power_history = []
+equity_history = []
+months = []
+
+for m in range(option_cycle):  # m = 0, 1, ..., option_cycle-1
+    lots, purchasing_power, calls_outstanding, puts_outstanding = run_one_month(
+        m, prices, lots, purchasing_power, calls_outstanding, puts_outstanding,
+        monthly_csp_premiums, monthly_cc_premiums
+    )
+
+    month_number = m + 1  # for printing / plotting
+    months.append(month_number)
+    lots_history.append(lots)
+    purchasing_power_history.append(purchasing_power)
+
+    # equity at END of month, so use prices[m+1]
+    current_price = prices[m + 1]
+    equity = purchasing_power + lots * current_price * 100
+    equity_history.append(equity)
+
+    print(f"----- MONTH {month_number} -----")
+    portfolio(lots, calls_outstanding, puts_outstanding, purchasing_power)
+
+
+plt.figure(figsize=(8,4))
+plt.plot(months, equity_history, marker="^", color="k")
+plt.title("Total Equity Over Time")
+plt.xlabel("Month")
+plt.ylabel("Total Equity ($)")
+plt.grid(True)
+plt.show()
+
+plt.figure(figsize=(8,4))
+plt.plot(months, lots_history, marker="o", color="red")
+plt.title("Lots Over Time")
+plt.xlabel("Month")
+plt.ylabel("Lots Owned")
+plt.grid(True)
+plt.show()
+
+plt.figure(figsize=(8,4))
+plt.plot(months, purchasing_power_history, marker="s", color="orange")
+plt.title("Purchasing Power Over Time")
+plt.xlabel("Month")
+plt.ylabel("Purchasing Power ($)")
+plt.grid(True)
+plt.show()
+
+final_price = prices[-1]
+print(lots*final_price*100 + purchasing_power, "This is the current dollar value of the portfolio after the option cycles.")
+print("")
+print("CSP Premiums Monthly were:", monthly_csp_premiums)
+print("Average CSP Premium was: $", sum(monthly_csp_premiums)/len(monthly_csp_premiums))
+print("CC Premiums Monthly were:", monthly_cc_premiums)
+print("Average CC Premium was: $", sum(monthly_cc_premiums)/len(monthly_cc_premiums))
+print("The stock price month to month was:", prices)
+print("The initial conditions were:")
+print("The stock was initially at:",price)
+print(f"Price at the end of simulation: ${final_price}")
+print(f"Lots: {init_lots}")
+print(f"Purchasing Power: ${init_purchasing_power}")
+print(f"The monthly deposit was: ${monthly_deposit}")
+print(f"Puts Outstanding: {init_puts_outstanding}")
+
+# --- Annual summary computation ---
+annual_equity = []
+annual_lots = []
+
+# Extract year-end data
+for year in range(1, option_cycle // 12 + 1):
+    end_index = year * 12 - 1
+    annual_equity.append(equity_history[end_index])
+    annual_lots.append(lots_history[end_index])
+
+print("\n===== ANNUAL SUMMARY =====")
+for i, eq in enumerate(annual_equity):
+    print(f"Year {i+1}: Lots = {annual_lots[i]}, Equity = ${eq}")
+
+print("\n===== ANNUAL PERCENT GROWTH =====")
+for i in range(1, len(annual_equity)):
+    growth = (annual_equity[i] - annual_equity[i-1]) / annual_equity[i-1] * 100
+    print(f"Year {i}: {growth:.2f}% growth")
+
+print("The initial investment was $",init_purchasing_power + monthly_deposit * option_cycle, " over ", int(option_cycle/12), " years. Initially had ", init_lots, " lots and ", init_puts_outstanding, " puts outstanding.")
+    
