@@ -1,1 +1,491 @@
-adding
+#Remark: this is my high risk option premium reinvestment calculator for growth due to dynamic premiums, share accumulation, & compounding returns.
+#Remark: The only kind of options traded in this model are Covered Calls and Cash Secured Puts. There will be no purchasing of options but only shorting them.
+#Remark: The model is currently adapted to only 1 stock; I trade Volatile Asian Penny Stocks since there are high premiums & cheap share prices. "NFA"
+#IMPORTANT: The purpose of this model is not to accumulate purchasing power; it is to accumulate shares over time with re-invested purchasing power, No margin is used.
+
+import matplotlib.pyplot as plt
+import numpy as np
+import math
+from collections import Counter
+
+purchasing_power = int(input("How much do you intend to initially deposit?")) #This is what I'm starting with in my own robinhood for the sake of having an application of this program 
+monthly_deposit=int(input("How much do you intend to deposit monthly?"))
+puts_outstanding = int(input("How many puts do you have sold initially?")) #These are just initialized
+
+lots = int(input("How many lots do you currently own? "))
+calls_outstanding = int(input("How many calls do you have sold initially?")) #These are just initialized
+price = float(input("What is the current stock price? "))
+
+if lots > 0:
+    avg_basis = float(input("What is your average cost basis per share? "))
+    lot_bases = [avg_basis] * lots   # one entry per lot
+else:
+    lot_bases = []
+option_cycle = int(input("How many months would you like to simulate over?")) #These are in terms of months, since the OCC has decided that my penny stock doesn't get weeklies, we have expiry every 4 weeks
+
+def print_lot_basis_summary(lot_bases):
+    if not lot_bases:
+        print("No lots owned.")
+        return
+    
+    counts = Counter(lot_bases)
+    # sort by basis ascending; use reverse=True if you want highest first
+    for basis, count in sorted(counts.items()):
+        print(f"{count} lots @ ${basis:.2f}")
+    
+    avg_basis = sum(lot_bases) / len(lot_bases)
+    print(f"Average basis: ${avg_basis:.4f}")
+
+init_purchasing_power=purchasing_power
+init_price=price
+init_lots=lots
+init_purchasing_power=purchasing_power
+init_puts_outstanding=puts_outstanding
+
+sentiment=input("How do you feel about the stock? The acceptable responses are: bullish, bearish, neutral")
+if sentiment == "bullish":
+    drift = 0.15  # example
+    volatility= 0.20
+elif sentiment == "bearish":
+    drift = -0.10
+    volatility= 0.20
+elif sentiment == "neutral":
+    drift = 0.0
+    volatility= 0.15
+elif sentiment == "volatile": #Hell Yeah, the penny stock i trade has super high volatility I can't lie about that at all; im using high vol to debug an infinite loop issue
+    print("Hell Yeah")
+    drift = 0.40 #variational parameter but the stock absolutely periodically blows up sometimes. It doesn't hold it, but its nice for my options
+    volatility = 0.70
+else:
+    drift = 0.0 #this is for static premiums but i alter the volatility in run one month so that there are consistent premiums for calls & puts to reward option selling
+    volatility= 0.0
+iv_vol=volatility+0.4 #implied vol is usually higher than realized vol, vol too high and the stock blows up but selling calls has a cushion, this is just for the options
+
+num_runs = int(input("How many Monte Carlo runs (paths) do you want to simulate? "))
+
+# Save clean copies of initial state for resetting each run
+init_lot_bases = lot_bases.copy()
+init_calls_outstanding = calls_outstanding
+
+MIN_OPTION_SPOT = 0.50
+S0=price
+def simulate_monthly_prices(S0, drift, volatility, option_cycle):
+    dt = 1/12  # one month = 1/12 yr
+    prices = np.empty(option_cycle + 1)
+    prices[0] = round(S0, 2)
+
+    # pre-draw all randomness
+    Z = np.random.normal(0, 1, size=option_cycle)
+
+    for t in range(1, option_cycle + 1):
+        S_next = prices[t-1] * np.exp(
+            (drift - 0.5 * volatility**2) * dt + volatility * np.sqrt(dt) * Z[t-1]
+        )
+        prices[t] = round(S_next, 2)
+
+    return prices
+prices = simulate_monthly_prices(S0, drift, volatility, option_cycle)
+
+STRIKE_TICK = 0.50     # ONLY half-dollar strikes
+STRIKE_DISTANCE = 0.50 # for calls, if you still want it
+
+def round_to_strike(level, tick=STRIKE_TICK):
+    return round(level / tick) * tick
+
+def next_higher_strike(spot, tick=STRIKE_TICK):
+    k = math.floor(spot / tick) + 1
+    return round(k * tick, 2)
+
+def choose_strike(spot, option_type, moneyness="OTM", distance=STRIKE_DISTANCE):
+    opt = option_type.lower()
+    m   = moneyness.upper()
+
+    if opt == "call":
+        if m == "ATM":
+            raw_strike = spot
+        elif m == "OTM":
+            # I only sell calls at least 2 * distance OTM
+            raw_strike = spot + 2 * distance
+        elif m == "ITM":
+            raw_strike = spot - distance
+        else:
+            raise ValueError("Bad moneyness for call")
+
+        return round_to_strike(raw_strike)
+
+    elif opt == "put":
+        # For CSPs: always nearest higher 0.50
+        return next_higher_strike(spot)
+
+    else:
+        raise ValueError("option_type must be 'call' or 'put'")
+    
+######
+def N(x):
+    """Standard normal CDF."""
+    return 0.5 * (1 + math.erf(x / math.sqrt(2)))
+
+def black_scholes(S, K, T, r, iv_vol, option_type='call'):
+    """
+    S: spot price
+    K: strike
+    T: time to expiry (years)
+    r: risk-free rate
+    sigma: volatility (annual)
+    option_type: 'call' or 'put'
+    """
+    if T <= 0 or iv_vol <= 0:
+        if option_type == 'call':
+            return max(S - K, 0)
+        else:
+            return max(K - S, 0)
+
+    d1 = (math.log(S/K) + (r + 0.5*iv_vol*iv_vol)*T) / (iv_vol*math.sqrt(T))
+    d2 = d1 - iv_vol*math.sqrt(T)
+
+    if option_type == 'call':
+        return S * N(d1) - K * math.exp(-r*T) * N(d2)
+    else:  # put
+        return K * math.exp(-r*T) * N(-d2) - S * N(-d1)
+    
+def bs_contract_premium(spot, strike, iv_vol, option_type='call',
+                        T=1/12, r=0.02,
+                        min_per_share=0.01, step_per_share=0.01):
+    """
+    Returns premium in DOLLARS PER CONTRACT (100 shares),
+    quantized to step_per_share (e.g. $0.01/share).
+    """
+    per_share = black_scholes(spot, strike, T, r, iv_vol, option_type)
+
+    # if premium is tiny, treat it as untradeable
+    if per_share < min_per_share:
+        return 0.0
+
+    # round to nearest tick (e.g. 0.05 per share)
+    ticks = round(per_share / step_per_share)
+    per_share_rounded = ticks * step_per_share
+
+    return round(per_share_rounded * 100, 2)  # dollars per contract
+
+###########
+
+def portfolio(lots, calls_outstanding, puts_outstanding, purchasing_power):
+    print("Lots owned: ", lots)
+    print("Purchasing Power: $", purchasing_power)
+    print("The equity of the portfolio is: $", purchasing_power + lots * prices[m + 1] * 100)
+
+monthly_cc_premiums = []
+monthly_csp_premiums = []
+
+def covered_call(lots, calls_outstanding, purchasing_power, monthly_premium_cc, calls_to_sell=1):
+
+    # lots that do NOT already have a call written on them
+    free_lots = lots - calls_outstanding
+
+    if free_lots <= 0:
+        # everything is already covered; can't sell more calls
+        return lots, calls_outstanding, purchasing_power
+
+    # you can't sell more calls than free lots
+    actual_calls_sold = min(calls_to_sell, free_lots)
+
+    calls_outstanding += actual_calls_sold
+    purchasing_power += monthly_premium_cc * actual_calls_sold
+
+    return lots, calls_outstanding, purchasing_power
+
+def cash_secured_put(purchasing_power, puts_outstanding, monthly_premium_csp, put_strike):
+    """
+    Simple CSP:
+      - 1 contract
+      - strike = chosen OTM/ATM/ITM level
+      - collateral ≈ put_strike * 100 - premium
+    """
+    notional = round(put_strike * 100, 2)
+    collateral = notional - monthly_premium_csp
+
+    # safety: don't let collateral go negative or zero
+    collateral = max(collateral, 0.01)
+
+    if purchasing_power >= collateral:
+        purchasing_power -= collateral      # lock collateral
+        puts_outstanding += 1               # one more CSP sold
+
+    return purchasing_power, puts_outstanding
+
+def run_one_month(
+    m,  # 0-based month index
+    prices,
+    lots,
+    purchasing_power,
+    calls_outstanding,
+    puts_outstanding,
+    monthly_csp_premiums,
+    monthly_cc_premiums,
+    lot_bases
+):
+    # --- prices for this month ---
+    price_start = prices[m]       # start-of-month price
+    price_end   = prices[m + 1]   # end-of-month price
+
+    if price_start < MIN_OPTION_SPOT:
+        # just deposit, update equity via price_end, and return
+        purchasing_power += monthly_deposit
+        # no new options, no expiries (we can assume old ones already dead), Option markets below $0.50 don't have fills or anything, so skip everything
+        calls_outstanding = 0
+        puts_outstanding  = 0
+        return lots, purchasing_power, calls_outstanding, puts_outstanding, lot_bases
+
+    # --- 1. Choose strikes for this month, based on START price ---
+    put_strike  = choose_strike(price_start, "put")          # nearest higher 0.50
+    call_strike = choose_strike(price_start, "call", "OTM")  # your OTM rule
+
+    #1.5
+    if lots > 0 and len(lot_bases) > 0:
+        max_basis = max(lot_bases)                     # highest cost basis per share
+        min_call_strike = round_to_strike(max_basis)   # align to strike grid
+        if call_strike < min_call_strike:
+            call_strike = min_call_strike
+
+    # --- 2. Compute CSP premium using Black–Scholes ---
+    monthly_premium_csp = bs_contract_premium(
+        spot=price_start,
+        strike=put_strike,
+        iv_vol=iv_vol,
+        option_type='put',
+        T=1/12,
+        r=0.02,
+        min_per_share=0.01,
+        step_per_share=0.01
+    )
+    monthly_csp_premiums.append(monthly_premium_csp)
+
+    # --- 3. Compute CC premium using Black–Scholes ---
+    monthly_premium_cc = bs_contract_premium(
+        spot=price_start,
+        strike=call_strike,
+        iv_vol=iv_vol,
+        option_type='call',
+        T=1/12,
+        r=0.02,
+        min_per_share=0.01,
+        step_per_share=0.01
+    )
+    monthly_cc_premiums.append(monthly_premium_cc)
+
+
+    # --- 4. Monthly deposit ---
+    purchasing_power += monthly_deposit
+
+    # --- 5. Sell covered calls on all free lots ---
+    existing_calls = calls_outstanding
+    while calls_outstanding < lots:
+        lots, calls_outstanding, purchasing_power = covered_call(
+            lots, calls_outstanding, purchasing_power, monthly_premium_cc
+        )
+    calls_sold_this_month = calls_outstanding - existing_calls  # if you ever want it
+
+    # --- 6. Sell CSPs with THIS SAME put_strike ---
+    notional = round(put_strike * 100, 2)
+    effective_collateral = notional - monthly_premium_csp
+    effective_collateral = max(effective_collateral, 0.01)
+
+    # puts that existed at the start of this month (like your initial 7)
+    existing_puts = puts_outstanding
+
+    puts_sold_this_month = 0
+    while purchasing_power >= effective_collateral:
+        purchasing_power, puts_outstanding = cash_secured_put(
+            purchasing_power,
+            puts_outstanding,
+            monthly_premium_csp,
+            put_strike
+        )
+        puts_sold_this_month += 1
+
+    # total puts that will be resolved at this expiry
+    total_puts_this_month = existing_puts + puts_sold_this_month
+
+    # --- 7. Resolve ALL puts (initial + new) at expiry using END price ---
+    if total_puts_this_month > 0:
+        if price_end < put_strike:
+            # ASSIGNMENT: each put becomes 1 lot
+            # True basis per share = strike - (premium_per_contract / 100)
+            basis_per_share = put_strike - (monthly_premium_csp / 100.0)
+            # optional: round a bit so you don't get ugly floats
+            basis_per_share = round(basis_per_share, 4)
+
+            lots += total_puts_this_month
+            for _ in range(total_puts_this_month):
+                lot_bases.append(basis_per_share)
+        else:
+            # EXPIRE WORTHLESS: refund only collateral we actually locked this month
+            purchasing_power += puts_sold_this_month * effective_collateral
+
+    # after expiry, no puts remain
+    puts_outstanding = 0
+
+
+    # --- 8. Resolve calls at expiry using END price ---
+    if calls_outstanding > 0:
+        if price_end > call_strike:
+            # ASSIGNMENT: lose lots, gain cash at strike
+            assigned_calls = min(calls_outstanding, lots)  # safety
+            lots -= assigned_calls
+            purchasing_power += assigned_calls * call_strike * 100
+
+            # Remove 'assigned_calls' lots from lot_bases (highest basis first)
+            for _ in range(assigned_calls):
+                if lot_bases:
+                    max_idx = max(range(len(lot_bases)), key=lambda i: lot_bases[i])
+                    lot_bases.pop(max_idx)
+
+        # whether ITM or OTM, those calls are done after expiry
+        calls_outstanding = 0
+    # --- 9. Return updated state ---
+    return lots, purchasing_power, calls_outstanding, puts_outstanding, lot_bases
+
+
+
+# --- Monte Carlo over many paths ---
+final_equities = []
+final_lots_list = []
+
+for run in range(num_runs):
+    # Reset state for this run
+    lots = init_lots
+    purchasing_power = init_purchasing_power
+    calls_outstanding = init_calls_outstanding
+    puts_outstanding = init_puts_outstanding
+    lot_bases = init_lot_bases.copy()
+
+    # New random price path each run
+    prices = simulate_monthly_prices(S0, drift, volatility, option_cycle)
+
+    # Per-run histories (only really useful for num_runs == 1)
+    lots_history = []
+    purchasing_power_history = []
+    equity_history = []
+    months = []
+
+    for m in range(option_cycle):
+        lots, purchasing_power, calls_outstanding, puts_outstanding, lot_bases = run_one_month(
+            m, prices, lots, purchasing_power, calls_outstanding, puts_outstanding,
+            monthly_csp_premiums, monthly_cc_premiums, lot_bases
+        )
+
+        month_number = m + 1
+        months.append(month_number)
+        lots_history.append(lots)
+        purchasing_power_history.append(purchasing_power)
+
+        current_price = prices[m + 1]
+        equity = purchasing_power + lots * current_price * 100
+        equity_history.append(equity)
+
+        # Only spam monthly prints for a single-run scenario
+        if num_runs == 1:
+            print(f"----- MONTH {month_number} -----")
+            portfolio(lots, calls_outstanding, puts_outstanding, purchasing_power)
+            print("Lot basis distribution this month:")
+            print_lot_basis_summary(lot_bases)
+            print("")
+
+    final_price = prices[-1]
+    final_equity = lots * final_price * 100 + purchasing_power
+    final_equities.append(final_equity)
+    final_lots_list.append(lots)
+
+    if num_runs == 1:
+        # All your old plots and detailed summary belong here for the single path
+
+        plt.figure(figsize=(8,4))
+        plt.plot(months, equity_history, marker="^", color="k")
+        plt.title("Total Equity Over Time")
+        plt.xlabel("Month")
+        plt.ylabel("Total Equity ($)")
+        plt.grid(True)
+        plt.show()
+
+        plt.figure(figsize=(8,4))
+        plt.plot(months, lots_history, marker="o", color="red")
+        plt.title("Lots Over Time")
+        plt.xlabel("Month")
+        plt.ylabel("Lots Owned")
+        plt.grid(True)
+        plt.show()
+
+        plt.figure(figsize=(8,4))
+        plt.plot(months, purchasing_power_history, marker="s", color="orange")
+        plt.title("Purchasing Power Over Time")
+        plt.xlabel("Month")
+        plt.ylabel("Purchasing Power ($)")
+        plt.grid(True)
+        plt.show()
+
+        print(lots*final_price*100 + purchasing_power, "This is the current dollar value of the portfolio after the option cycles.")
+        print("")
+        print("CSP Premiums Monthly were:", monthly_csp_premiums)
+        if monthly_csp_premiums:
+            print("Average CSP Premium was: $", sum(monthly_csp_premiums)/len(monthly_csp_premiums))
+        else:
+            print("Average CSP Premium was: N/A (no CSPs sold)")
+
+        print("CC Premiums Monthly were:", monthly_cc_premiums)
+        if monthly_cc_premiums:
+            print("Average CC Premium was: $", sum(monthly_cc_premiums)/len(monthly_cc_premiums))
+        else:
+            print("Average CC Premium was: N/A (no CCs sold)")
+
+        print("The stock price month to month was:", prices)
+        print("The initial conditions were:")
+        print("The stock was initially at:",price)
+        print(f"Price at the end of simulation: ${final_price}")
+        print(f"We initially had Lots: {init_lots}")
+        print(f"Purchasing Power initially was: ${init_purchasing_power}")
+        print(f"The monthly deposit was: ${monthly_deposit}")
+        print(f"Initial Amount of Puts Outstanding were: {init_puts_outstanding}")
+
+        # --- Annual summary computation ---
+        annual_equity = []
+        annual_lots = []
+        for year in range(1, option_cycle // 12 + 1):
+            end_index = year * 12 - 1
+            annual_equity.append(equity_history[end_index])
+            annual_lots.append(lots_history[end_index])
+
+        print("\n===== ANNUAL SUMMARY =====")
+        for i, eq in enumerate(annual_equity):
+            print(f"Year {i+1}: Lots = {annual_lots[i]}, Equity = ${eq}")
+
+        print("\n===== ANNUAL PERCENT GROWTH =====")
+        for i in range(1, len(annual_equity)):
+            growth = (annual_equity[i] - annual_equity[i-1]) / annual_equity[i-1] * 100
+            print(f"Year {i}: {growth:.2f}% growth")
+
+        print("The initial investment was $",init_purchasing_power + monthly_deposit * option_cycle, " over ", int(option_cycle/12), " years. Initially had ", init_lots, " lots and ", init_puts_outstanding, " puts outstanding.")
+
+# ---- After all runs: Monte Carlo summary ----
+print("\n===== MONTE CARLO SUMMARY =====")
+print(f"Number of runs: {num_runs}")
+print("Final equity samples:", final_equities)
+
+avg_final_equity = sum(final_equities) / len(final_equities)
+median_final_equity = np.median(final_equities)          # <-- NEW
+p25 = np.percentile(final_equities, 25)                  # optional
+p75 = np.percentile(final_equities, 75)                  # optional
+
+print(f"Average final equity: ${avg_final_equity:.2f}")
+print(f"Median final equity:  ${median_final_equity:.2f}")   # <-- NEW
+print(f"Min final equity:     ${min(final_equities):.2f}")
+print(f"Max final equity:     ${max(final_equities):.2f}")
+print(f"25th percentile:      ${p25:.2f}")   # optional
+print(f"75th percentile:      ${p75:.2f}")   # optional
+
+plt.figure(figsize=(8,4))
+plt.hist(final_equities, bins=30)
+plt.title("Distribution of Final Equity (Monte Carlo)")
+plt.xlabel("Final Equity ($)")
+plt.ylabel("Frequency")
+plt.grid(True)
+plt.show()
