@@ -6,6 +6,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import math
+from collections import Counter
 
 purchasing_power = int(input("How much do you intend to initially deposit?")) #This is what I'm starting with in my own robinhood for the sake of having an application of this program 
 monthly_deposit=int(input("How much do you intend to deposit monthly?"))
@@ -21,6 +22,19 @@ if lots > 0:
 else:
     lot_bases = []
 option_cycle = int(input("How many months would you like to simulate over?")) #These are in terms of months, since the OCC has decided that my penny stock doesn't get weeklies, we have expiry every 4 weeks
+
+def print_lot_basis_summary(lot_bases):
+    if not lot_bases:
+        print("No lots owned.")
+        return
+    
+    counts = Counter(lot_bases)
+    # sort by basis ascending; use reverse=True if you want highest first
+    for basis, count in sorted(counts.items()):
+        print(f"{count} lots @ ${basis:.2f}")
+    
+    avg_basis = sum(lot_bases) / len(lot_bases)
+    print(f"Average basis: ${avg_basis:.4f}")
 
 init_purchasing_power=purchasing_power
 init_price=price
@@ -41,7 +55,7 @@ elif sentiment == "neutral":
 elif sentiment == "volatile": #Hell Yeah, the penny stock i trade has super high volatility I can't lie about that at all; im using high vol to debug an infinite loop issue
     print("Hell Yeah")
     drift = 0.40 #variational parameter but the stock absolutely periodically blows up sometimes. It doesn't hold it, but its nice for my options
-    volatility = 0.50
+    volatility = 0.90
 else:
     drift = 0.0 #this is for static premiums but i alter the volatility in run one month so that there are consistent premiums for calls & puts to reward option selling
     volatility= 0.0
@@ -202,7 +216,8 @@ def run_one_month(
     calls_outstanding,
     puts_outstanding,
     monthly_csp_premiums,
-    monthly_cc_premiums
+    monthly_cc_premiums,
+    lot_bases
 ):
     # --- prices for this month ---
     price_start = prices[m]       # start-of-month price
@@ -214,14 +229,18 @@ def run_one_month(
         # no new options, no expiries (we can assume old ones already dead), Option markets below $0.50 don't have fills or anything, so skip everything
         calls_outstanding = 0
         puts_outstanding  = 0
-        return lots, purchasing_power, calls_outstanding, puts_outstanding
+        return lots, purchasing_power, calls_outstanding, puts_outstanding, lot_bases
 
     # --- 1. Choose strikes for this month, based on START price ---
     put_strike  = choose_strike(price_start, "put")          # nearest higher 0.50
     call_strike = choose_strike(price_start, "call", "OTM")  # your OTM rule
 
     #1.5
-    
+    if lots > 0 and len(lot_bases) > 0:
+        max_basis = max(lot_bases)                     # highest cost basis per share
+        min_call_strike = round_to_strike(max_basis)   # align to strike grid
+        if call_strike < min_call_strike:
+            call_strike = min_call_strike
 
     # --- 2. Compute CSP premium using Black–Scholes ---
     monthly_premium_csp = bs_contract_premium(
@@ -286,13 +305,21 @@ def run_one_month(
     if total_puts_this_month > 0:
         if price_end < put_strike:
             # ASSIGNMENT: each put becomes 1 lot
+            # True basis per share = strike - (premium_per_contract / 100)
+            basis_per_share = put_strike - (monthly_premium_csp / 100.0)
+            # optional: round a bit so you don't get ugly floats
+            basis_per_share = round(basis_per_share, 4)
+
             lots += total_puts_this_month
+            for _ in range(total_puts_this_month):
+                lot_bases.append(basis_per_share)
         else:
             # EXPIRE WORTHLESS: refund only collateral we actually locked this month
             purchasing_power += puts_sold_this_month * effective_collateral
 
-        # after expiry, no puts remain
-        puts_outstanding = 0
+    # after expiry, no puts remain
+    puts_outstanding = 0
+
 
     # --- 8. Resolve calls at expiry using END price ---
     if calls_outstanding > 0:
@@ -301,11 +328,17 @@ def run_one_month(
             assigned_calls = min(calls_outstanding, lots)  # safety
             lots -= assigned_calls
             purchasing_power += assigned_calls * call_strike * 100
+
+            # Remove 'assigned_calls' lots from lot_bases (highest basis first)
+            for _ in range(assigned_calls):
+                if lot_bases:
+                    max_idx = max(range(len(lot_bases)), key=lambda i: lot_bases[i])
+                    lot_bases.pop(max_idx)
+
         # whether ITM or OTM, those calls are done after expiry
         calls_outstanding = 0
-
     # --- 9. Return updated state ---
-    return lots, purchasing_power, calls_outstanding, puts_outstanding
+    return lots, purchasing_power, calls_outstanding, puts_outstanding, lot_bases
 
 
 
@@ -314,10 +347,10 @@ purchasing_power_history = []
 equity_history = []
 months = []
 
-for m in range(option_cycle):  # m = 0, 1, ..., option_cycle-1
-    lots, purchasing_power, calls_outstanding, puts_outstanding = run_one_month(
+for m in range(option_cycle):
+    lots, purchasing_power, calls_outstanding, puts_outstanding, lot_bases = run_one_month(
         m, prices, lots, purchasing_power, calls_outstanding, puts_outstanding,
-        monthly_csp_premiums, monthly_cc_premiums
+        monthly_csp_premiums, monthly_cc_premiums, lot_bases
     )
 
     month_number = m + 1  # for printing / plotting
@@ -332,6 +365,10 @@ for m in range(option_cycle):  # m = 0, 1, ..., option_cycle-1
 
     print(f"----- MONTH {month_number} -----")
     portfolio(lots, calls_outstanding, puts_outstanding, purchasing_power)
+    print("Lot basis distribution this month:")
+    print_lot_basis_summary(lot_bases)
+    print("")
+
 
 
 plt.figure(figsize=(8,4))
@@ -369,10 +406,10 @@ print("The stock price month to month was:", prices)
 print("The initial conditions were:")
 print("The stock was initially at:",price)
 print(f"Price at the end of simulation: ${final_price}")
-print(f"Lots: {init_lots}")
-print(f"Purchasing Power: ${init_purchasing_power}")
+print(f"We initially had Lots: {init_lots}")
+print(f"Purchasing Power initially was: ${init_purchasing_power}")
 print(f"The monthly deposit was: ${monthly_deposit}")
-print(f"Puts Outstanding: {init_puts_outstanding}")
+print(f"Initial Amount of Puts Outstanding were: {init_puts_outstanding}")
 
 # --- Annual summary computation ---
 annual_equity = []
