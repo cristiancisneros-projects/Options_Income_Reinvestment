@@ -73,7 +73,7 @@ iv_vol=volatility+0.7 #implied vol is usually higher than realized vol, vol too 
 
 num_runs = int(input("How many Monte Carlo runs (paths) do you want to simulate? "))
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-base_output_dir = f"sim_runs_{timestamp}"
+base_output_dir = f"sim_runs_{sentiment}_{timestamp}"
 os.makedirs(base_output_dir, exist_ok=True)
 
 # Save clean copies of initial state for resetting each run
